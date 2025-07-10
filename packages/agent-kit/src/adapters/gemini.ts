@@ -17,7 +17,7 @@ import { type Tool } from "../tool";
  * Parse a request from internal network messages to an Gemini input.
  */
 export const requestParser: AgenticModel.RequestParser<Gemini.AiModel> = (
-  _model,
+  model,
   messages,
   tools,
   tool_choice = "auto"
@@ -33,19 +33,56 @@ export const requestParser: AgenticModel.RequestParser<Gemini.AiModel> = (
         (geminiZodToJsonSchema(z.object({})) as any),
   }));
 
-  return {
+  const request: AiAdapter.Input<Gemini.AiModel> = {
     contents,
     ...(tools.length > 0
-      ? {
-          tools: [
-            {
-              functionDeclarations,
-            },
-          ],
-          tool_config: toolChoice(tool_choice),
-        }
+      ? (() => {
+          const config = toolChoice(tool_choice);
+          return {
+            tools: [
+              {
+                functionDeclarations,
+              },
+            ],
+            toolConfig: config,
+            // Keep backwards compatibility with Gemini 1.x which expects
+            // snake_case field names.
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            ...( { tool_config: config } as any ),
+          };
+        })()
       : {}),
   };
+
+  const defaults = model.options?.defaultParameters ?? {};
+
+  if (defaults.safetySettings) {
+    request.safetySettings = defaults.safetySettings as unknown as AiAdapter.Input<Gemini.AiModel>["safetySettings"];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (request as any).safety_settings = request.safetySettings;
+  }
+
+  if (defaults.systemInstruction) {
+    const instr = typeof defaults.systemInstruction === "string"
+      ? { role: "system", parts: [{ text: defaults.systemInstruction }]} : defaults.systemInstruction;
+    request.systemInstruction = instr as AiAdapter.Input<Gemini.AiModel>["systemInstruction"];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (request as any).system_instruction = request.systemInstruction;
+  }
+
+  if (defaults.generationConfig) {
+    request.generationConfig = defaults.generationConfig as AiAdapter.Input<Gemini.AiModel>["generationConfig"];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (request as any).generation_config = request.generationConfig;
+  }
+
+  if (defaults.cachedContent) {
+    request.cachedContent = defaults.cachedContent as AiAdapter.Input<Gemini.AiModel>["cachedContent"];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (request as any).cached_content = request.cachedContent;
+  }
+
+  return request;
 };
 
 const messageContentToString = (content: string | TextContent[]): string => {

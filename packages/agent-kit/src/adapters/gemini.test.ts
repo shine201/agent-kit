@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { recursiveGeminiZodToJsonSchema } from "./gemini";
+import { recursiveGeminiZodToJsonSchema, requestParser } from "./gemini";
+import type { Gemini } from "@inngest/ai";
 
 // Utility to deep-clone objects without preserving references
 const clone = <T>(obj: T): T => {
@@ -196,5 +197,33 @@ describe("recursiveGeminiZodToJsonSchema", () => {
 
     recursiveGeminiZodToJsonSchema(input);
     expect(input).toEqual(inputClone);
+  });
+});
+
+describe("requestParser additional fields", () => {
+  test("includes optional fields when provided", () => {
+    const model = {
+      options: {
+        defaultParameters: {
+          safetySettings: [
+            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+          ],
+          systemInstruction: "Stay safe",
+          generationConfig: { temperature: 0.1 },
+          cachedContent: "foo/bar",
+        },
+      },
+    } as unknown as Gemini.AiModel;
+
+    const req = requestParser(model, [], [], "auto");
+
+    expect(req).toHaveProperty("safetySettings");
+    expect((req as any).safety_settings).toEqual(req.safetySettings);
+    expect(req).toHaveProperty("systemInstruction");
+    expect((req as any).system_instruction).toEqual(req.systemInstruction);
+    expect(req).toHaveProperty("generationConfig");
+    expect((req as any).generation_config).toEqual(req.generationConfig);
+    expect(req).toHaveProperty("cachedContent", "foo/bar");
+    expect((req as any).cached_content).toEqual("foo/bar");
   });
 });
