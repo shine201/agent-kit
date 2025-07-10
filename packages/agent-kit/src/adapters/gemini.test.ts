@@ -1,5 +1,10 @@
-import { describe, expect, test } from "vitest";
-import { recursiveGeminiZodToJsonSchema } from "./gemini";
+import { describe, expect, test, vi } from "vitest";
+import { z } from "zod";
+import {
+  recursiveGeminiZodToJsonSchema,
+  requestParser,
+  responseParser,
+} from "./gemini";
 
 // Utility to deep-clone objects without preserving references
 const clone = <T>(obj: T): T => {
@@ -196,5 +201,134 @@ describe("recursiveGeminiZodToJsonSchema", () => {
 
     recursiveGeminiZodToJsonSchema(input);
     expect(input).toEqual(inputClone);
+  });
+});
+
+describe("gemini adapters", () => {
+  test("requestParser formats messages and tools", () => {
+    const messages = [
+      { role: "system", type: "text", content: "sys" },
+      { role: "user", type: "text", content: "hi" },
+      { role: "assistant", type: "text", content: "there" },
+      {
+        role: "assistant",
+        type: "tool_call",
+        stop_reason: "tool",
+        tools: [
+          {
+            type: "tool",
+            id: "foo",
+            name: "foo",
+            input: { a: 1 },
+          },
+        ],
+      },
+      {
+        role: "tool_result",
+        type: "tool_result",
+        stop_reason: "tool",
+        tool: {
+          type: "tool",
+          id: "foo",
+          name: "foo",
+          input: { a: 1 },
+        },
+        content: { ok: true },
+      },
+    ];
+
+    const tools = [
+      {
+        name: "foo",
+        description: "Foo",
+        // simple parameters object
+        parameters: z.object({ a: z.number() }),
+      },
+    ];
+
+    const req = requestParser({} as any, messages as any, tools as any, "auto");
+
+    expect(req.contents).toEqual([
+      { role: "user", parts: [{ text: "sys" }] },
+      { role: "user", parts: [{ text: "hi" }] },
+      { role: "model", parts: [{ text: "there" }] },
+      {
+        role: "model",
+        parts: [
+          {
+            functionCall: { name: "foo", args: { a: 1 } },
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "foo",
+              response: { name: "foo", content: "{\"ok\":true}" },
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(req.tool_config).toEqual({
+      functionCallingConfig: { mode: "AUTO" },
+    });
+    expect(req.tools?.[0]?.functionDeclarations?.[0]?.name).toBe("foo");
+  });
+
+  test("responseParser parses candidates", () => {
+    const input = {
+      candidates: [
+        {
+          content: { role: "model", parts: [{ text: "hello" }] },
+        },
+        {
+          content: {
+            role: "model",
+            parts: [{ functionCall: { name: "foo", args: { a: 1 } } }],
+          },
+        },
+        {
+          content: {
+            role: "user",
+            parts: [
+              { functionResponse: { name: "foo", response: { success: true } } },
+            ],
+          },
+        },
+        {
+          finishReason: "MALFORMED_FUNCTION_CALL",
+          content: { role: "model", parts: [{ text: "bad" }] },
+        },
+      ],
+    } as any;
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const msgs = responseParser(input);
+
+    expect(msgs).toEqual([
+      { role: "assistant", type: "text", content: "hello" },
+      {
+        role: "assistant",
+        type: "tool_call",
+        stop_reason: "tool",
+        tools: [
+          { type: "tool", id: "foo", name: "foo", input: { a: 1 } },
+        ],
+      },
+      {
+        role: "tool_result",
+        type: "tool_result",
+        stop_reason: "tool",
+        tool: { type: "tool", id: "foo", name: "foo", input: { success: true } },
+        content: "{\"success\":true}",
+      },
+    ]);
+
+    expect(warn).toHaveBeenCalled();
   });
 });
